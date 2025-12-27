@@ -51,6 +51,13 @@ export const data = new SlashCommandBuilder()
 export async function execute(interactionOrMessage, client) {
   const isInteraction = typeof interactionOrMessage.isCommand === "function" || typeof interactionOrMessage.isChatInputCommand === "function";
   const user = isInteraction ? interactionOrMessage.user : interactionOrMessage.author;
+  
+  // Guard against missing user
+  if (!user || !user.id) {
+    console.error("Invalid user object in team command");
+    return;
+  }
+  
   const channel = isInteraction ? interactionOrMessage.channel : interactionOrMessage.channel;
   const userId = user.id;
 

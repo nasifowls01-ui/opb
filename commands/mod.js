@@ -69,8 +69,8 @@ export default {
         }
 
         const target = message.mentions.users.first();
-        if (!target) {
-          await message.channel.send("❌ Please mention a user to give the card to.");
+        if (!target || !target.id) {
+          await message.channel.send("❌ Please mention a valid user to give the card to.");
           return;
         }
 
@@ -88,7 +88,8 @@ export default {
         entry.count = (entry.count || 0) + 1;
         entry.acquiredAt = entry.acquiredAt || Date.now();
         cardsMap.set(card.id, entry);
-        prog.cards = Object.fromEntries(cardsMap);
+        prog.cards = cardsMap;
+        prog.markModified('cards');
         await prog.save();
         await message.channel.send(`Gave card ${card.name} to <@${target.id}>.`);
         break;
@@ -125,7 +126,8 @@ export default {
         const entry = cardsMap.get(card.id) || { count: 0, xp: 0, level: 0 };
         entry.level = level;
         cardsMap.set(card.id, entry);
-        prog.cards = Object.fromEntries(cardsMap);
+        prog.cards = cardsMap;
+        prog.markModified('cards');
         await prog.save();
         await message.channel.send(`Set level of ${card.name} for <@${target.id}> to ${level}.`);
         break;

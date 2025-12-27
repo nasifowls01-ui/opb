@@ -3,7 +3,7 @@ import Progress from "../models/Progress.js";
 import Balance from "../models/Balance.js";
 import { cards, getCardById } from "../cards.js";
 
-export const data = new SlashCommandBuilder().setName("upgrade").setDescription("Upgrade a card (fuzzy match)").addStringOption(opt => opt.setName("card").setDescription("Card id or name").setRequired(true));
+export const data = new SlashCommandBuilder().setName("upgrade").setDescription("Upgrade a card").addStringOption(opt => opt.setName("card").setDescription("Card id or name").setRequired(true));
 
 function fuzzyFindCard(query) {
   if (!query) return null;
@@ -84,6 +84,10 @@ export async function execute(interactionOrMessage, client) {
   // deduct cost
   bal.amount -= cost;
   await bal.save();
+  // Remove previous card from collection (when upgrading from base to upgrade)
+  if (baseCard.id !== upgradeCard.id) {
+    cardsMap.delete(baseCard.id);
+  }
 
   // create or update upgraded card entry — carry over level/xp from base
   const upgradedEntry = cardsMap.get(upgradeCard.id) || { count: 0, xp: 0, level: 0 };
@@ -95,7 +99,8 @@ export async function execute(interactionOrMessage, client) {
   cardsMap.set(upgradeCard.id, upgradedEntry);
 
   // save back
-  prog.cards = Object.fromEntries(cardsMap);
+  prog.cards = cardsMap;
+  prog.markModified('cards');
   await prog.save();
 
   const reply = `Upgraded ${baseCard.name} → ${upgradeCard.name}! ${cost}¥ has been deducted.`;

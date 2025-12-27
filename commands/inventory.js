@@ -28,7 +28,9 @@ export async function execute(interactionOrMessage, client) {
   if ((chests.A || 0) > 0) lines.push(`**A Tier Chest** (${chests.A})`);
   if ((chests.S || 0) > 0) lines.push(`**S Tier Chest** (${chests.S})`);
 
-  if ((inv.xpBottles || 0) > 0) lines.push(`**XP scroll** (${inv.xpBottles})`);
+  const scrollCount = (inv.xpScrolls > 0) ? inv.xpScrolls : ((inv.xpBottles || 0) > 0 ? inv.xpBottles : 0);
+  if (scrollCount > 0) lines.push(`**XP scroll** (${scrollCount})`);
+  if ((inv.xpBooks || 0) > 0) lines.push(`**XP book** (${inv.xpBooks})`);
 
   // list other items (exclude reset_token which is stored on Balance)
   if (inv.items) {

@@ -9,7 +9,9 @@ const InventorySchema = new mongoose.Schema({
     A: { type: Number, default: 0 }
     ,S: { type: Number, default: 0 }
   },
-  xpBottles: { type: Number, default: 0 }
+  xpBottles: { type: Number, default: 0 },
+  xpScrolls: { type: Number, default: 0 },
+  xpBooks: { type: Number, default: 0 }
 });
 
 export default mongoose.models.Inventory || mongoose.model("Inventory", InventorySchema);

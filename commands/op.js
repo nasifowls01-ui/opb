@@ -168,7 +168,8 @@ export async function execute(interactionOrMessage, client) {
     const entry = cardsMap.get(card.id) || { count: 0, xp: 0, level: 0, acquiredAt: Date.now() };
     entry.count = (entry.count || 0) + 1;
     cardsMap.set(card.id, entry);
-    prog.cards = Object.fromEntries(cardsMap);
+    prog.cards = cardsMap;
+    prog.markModified('cards');
     await prog.save();
     const embed = new EmbedBuilder().setTitle("Card Given").setDescription(`Gave **${card.name}** to <@${target.id}>`).setColor(0x3498db);
     if (isInteraction) return interactionOrMessage.reply({ embeds: [embed], ephemeral: true }); else return channel.send({ embeds: [embed] });

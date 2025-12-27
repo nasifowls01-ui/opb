@@ -51,7 +51,7 @@ export async function execute(interactionOrMessage, client) {
   if (!inventory) inventory = new Inventory({ userId });
 
   if (!inventory.chests[rank] || inventory.chests[rank] < amount) {
-    const replyText = `❌ You don't have enough ${rank} rank chests! You have: ${inventory.chests[rank] || 0}`;
+    const replyText = `You don't have enough ${rank} rank chests! You have: ${inventory.chests[rank] || 0}`;
     if (isInteraction) return interactionOrMessage.reply(replyText);
     return channel.send(replyText);
   }
@@ -109,12 +109,13 @@ export async function execute(interactionOrMessage, client) {
   // consume chests
   inventory.chests[rank] -= amount;
 
-  // apply xp scrolls
-  inventory.xpBottles = (inventory.xpBottles || 0) + totalXpScrolls;
+  // apply xp scrolls/books
+  inventory.xpScrolls = (inventory.xpScrolls || 0) + totalXpScrolls;
+  inventory.xpBooks = (inventory.xpBooks || 0) + totalXpBooks;
 
   // apply items (reset tokens go to Balance.resetTokens, not inventory)
-  putItem('xp_book', totalXpBooks);
-  putItem('battle_token', totalBattleTokens);
+  // XP books are stored in inventory.xpBooks (avoid duplicating as 'xp_book')
+  putItem('Battle Token', totalBattleTokens);
   for (const [k, v] of Object.entries(healingTotals)) putItem(k, v);
   for (const [k, v] of Object.entries(materialTotals)) putItem(k, v);
   for (const leg of legendaryWon) putItem(leg, 1);
@@ -156,7 +157,7 @@ export async function execute(interactionOrMessage, client) {
   lines.push(`beli **${totalYen}**`);
   if (totalXpScrolls) lines.push(`XP scroll **${totalXpScrolls}**`);
   if (totalXpBooks) lines.push(`XP book **${totalXpBooks}**`);
-  if (totalBattleTokens) lines.push(`battletoken *x${totalBattleTokens}*`);
+  if (totalBattleTokens) lines.push(`Battle Token **${totalBattleTokens}**`);
   if (totalResetTokens) lines.push(`reset token *x${totalResetTokens}*`);
 
   for (const [k, v] of Object.entries(healingTotals)) lines.push(`${k} *x${v}*`);

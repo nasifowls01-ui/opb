@@ -16,8 +16,8 @@ function progressBar(curr, max, size = 20){
   const pct = Math.max(0, Math.min(1, (curr / max) || 0));
   const filled = Math.round(pct * size);
   const empty = size - filled;
-  const filledChar = '▮';
-  const emptyChar = '▯';
+  const filledChar = '█';
+  const emptyChar = '░';
   return filledChar.repeat(filled) + emptyChar.repeat(empty) + ` ${Math.round(pct*100)}%`;
 }
 
@@ -61,7 +61,16 @@ export async function execute(interactionOrMessage, client){
     let sum = 0; let found = 0;
     for (const cid of teamArr){
       const c = cards.find(x => x.id === cid);
-      if (c){ sum += (c.power || 0); found++; teamNames.push(`${c.name} (${c.rank})`); }
+      if (c){
+        // Calculate power with level boost: power * (1 + level * 0.01)
+        const hasMap = prog && prog.cards && typeof prog.cards.get === 'function';
+        const cardProgress = hasMap ? (prog.cards.get(cid) || { level: 1 }) : (prog.cards && prog.cards[cid] || { level: 1 });
+        const levelBoost = (cardProgress.level || 1) * 0.01;
+        const boostedPower = Math.round(c.power * (1 + levelBoost));
+        sum += boostedPower;
+        found++;
+        teamNames.push(`${c.name} (${c.rank})`);
+      }
     }
     avgPower = found ? Math.round(sum / found) : 0;
   }
@@ -83,9 +92,11 @@ export async function execute(interactionOrMessage, client){
     .setThumbnail(user.displayAvatarURL ? user.displayAvatarURL() : null)
     .setDescription(
       `Level ${level} • XP to next: ${xpToNext}\n${bar}\n\n` +
-      `**Wealth:** ${fmtNumber(wealth)}¥ • **Global Rank:** #${globalRank}\n` +
-      `**Team (avg power):** ${teamNames.length ? teamNames.join(", ") + ` • ${avgPower}` : "None"}\n` +
-      `**Statistics:**\n• Total pulls: ${fmtNumber(totalPulls)}\n• Unique cards: ${uniqueCards}\n• Total cards owned: ${totalCardsCount}`
+      `**Wealth:** ${fmtNumber(wealth)}¥\n` +
+      `**Global ranking:** #${globalRank}\n\n` +
+      `**statistics:**\n` +
+      `total pulls: ${fmtNumber(totalPulls)}\n` +
+      `Unique Cards: ${uniqueCards}/${cards.length}`
     )
     .setFooter({ text: `Requested by ${ (interactionOrMessage.user || interactionOrMessage.author).username }`, iconURL: (interactionOrMessage.user || interactionOrMessage.author).displayAvatarURL?.() });
 

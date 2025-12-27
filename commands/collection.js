@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } from "discord.js";
 import Progress from "../models/Progress.js";
 import { getCardById, cards, getRankInfo } from "../cards.js";
 
@@ -9,6 +9,7 @@ const SORT_MODES = {
   wtb: "worst",
   lbtw: "level_desc",
   lwtb: "level_asc",
+  rank: "rank",
   nto: "newest",
   otn: "oldest",
 };
@@ -48,6 +49,9 @@ function sortCollection(items, mode) {
       return items.sort((a, b) => (b.entry.level || 0) - (a.entry.level || 0));
     case SORT_MODES.lwtb:
       return items.sort((a, b) => (a.entry.level || 0) - (b.entry.level || 0));
+    case SORT_MODES.rank:
+      // sort by rank value (higher is better) then by level
+      return items.sort((a, b) => (getRankInfo(b.card.rank)?.value || 0) - (getRankInfo(a.card.rank)?.value || 0) || (b.entry.level || 0) - (a.entry.level || 0));
     case SORT_MODES.nto:
       return items.sort((a, b) => (b.entry.acquiredAt || 0) - (a.entry.acquiredAt || 0));
     case SORT_MODES.otn:
@@ -138,6 +142,21 @@ export async function execute(interactionOrMessage, client) {
     new ButtonBuilder().setCustomId(nextId).setLabel("Next").setStyle(ButtonStyle.Secondary)
   );
 
-  if (isInteraction) await interactionOrMessage.reply({ embeds: [embed], components: [row] });
+  // add a select menu for sort options (interaction only)
+  const sortMenu = new StringSelectMenuBuilder()
+    .setCustomId(`collection_sort:${userId}`)
+    .setPlaceholder('Sort collection')
+    .addOptions([
+      { label: 'Best to Worst', value: 'best' },
+      { label: 'Worst to Best', value: 'wtb' },
+      { label: 'Level High → Low', value: 'lbtw' },
+      { label: 'Level Low → High', value: 'lwtb' },
+      { label: 'Rank High → Low', value: 'rank' },
+      { label: 'Newest → Oldest', value: 'nto' },
+      { label: 'Oldest → Newest', value: 'otn' }
+    ]);
+  const sortRow = new ActionRowBuilder().addComponents(sortMenu);
+
+  if (isInteraction) await interactionOrMessage.reply({ embeds: [embed], components: [sortRow, row] });
   else await channel.send({ embeds: [embed], components: [row] });
 }

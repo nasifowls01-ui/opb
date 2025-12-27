@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
-import { getRandomCardByProbability, getRankInfo } from "../cards.js";
+import { getRandomCardByProbability, getRankInfo, getCardById } from "../cards.js";
 import Pull from "../models/Pull.js";
 import Balance from "../models/Balance.js";
 import Progress from "../models/Progress.js";
@@ -14,7 +14,7 @@ const RANK_XP = {
 };
 
 // default probabilities (percentages)
-const PULL_PROBABILITIES = { C: 50, B: 30, A: 15, S: 3, ITEM: 2 };
+const PULL_PROBABILITIES = { C: 60, B: 30, A: 8, S: 1, ITEM: 1 };
 
 // MongoDB (mongoose) is used for persistence via models/Pull.js and models/Progress.js
 
@@ -32,6 +32,13 @@ export async function execute(interactionOrMessage, client) {
   // determine if this is an interaction or a message
   const isInteraction = typeof interactionOrMessage.isCommand === "function" || typeof interactionOrMessage.isChatInputCommand === "function";
   const user = isInteraction ? interactionOrMessage.user : interactionOrMessage.author;
+  
+  // Guard against missing user
+  if (!user || !user.id) {
+    console.error("Invalid user object in pull command");
+    return;
+  }
+  
   const channel = isInteraction ? interactionOrMessage.channel : interactionOrMessage.channel;
   const userId = user.id;
 
@@ -104,9 +111,36 @@ export async function execute(interactionOrMessage, client) {
   // footer will show pity cycle progress instead of per-window pulls
   const footer = `Pity: ${cyclePos}/100`;
 
+  // If user already owns an upgraded version of this card, convert the pull
+  // to that highest owned upgrade in the chain.
+  function getUpgradeChainSync(card) {
+    const chain = [card];
+    const visited = new Set([card.id]);
+    let current = card;
+    while (current && current.evolutions && current.evolutions.length > 0) {
+      const nextCardId = current.evolutions[0];
+      const nextCard = getCardById(nextCardId);
+      if (!nextCard || visited.has(nextCard.id)) break;
+      visited.add(nextCard.id);
+      chain.push(nextCard);
+      current = nextCard;
+    }
+    return chain;
+  }
+
+  const chain = getUpgradeChainSync(pulled);
+  let ownedUpgrade = null;
+  for (let i = 1; i < chain.length; i++) {
+    const cardInChain = chain[i];
+    const entry = userCardsMap.get(cardInChain.id);
+    if (entry && (entry.count || 0) > 0) ownedUpgrade = cardInChain;
+  }
+  if (ownedUpgrade) pulled = ownedUpgrade;
+
   // check duplicate -> convert to XP
   // read existing entry from Map
   const existing = userCardsMap.get(pulled.id);
+  const wasDuplicate = !!existing && (existing.count || 0) > 0;
 
   // sample a level between 1 and cyclePos (rarer for higher levels)
   function sampleLevel(maxLevel) {
@@ -152,8 +186,9 @@ export async function execute(interactionOrMessage, client) {
     description = ``;
   }
 
-  // write back to progress doc (store as plain object to avoid Map persistence quirks)
-  progDoc.cards = Object.fromEntries(userCardsMap);
+  // write back to progress doc (keep as Map for Mongoose tracking)
+  progDoc.cards = userCardsMap;
+  progDoc.markModified('cards');
   await progDoc.save();
 
   // Update quest progress
@@ -204,11 +239,20 @@ export async function execute(interactionOrMessage, client) {
   // build compact 2x2 embed layout and include pulled level
   const displayEntry = userCardsMap.get(pulled.id) || {};
   const displayLevel = displayEntry.level || 0;
-  const statsText = `**Level:** ${displayLevel}
+  // If this was a duplicate pull, do not show the duplicate's level — show XP conversion only
+  let statsText;
+  if (wasDuplicate) {
+    statsText = `**Power:** ${effectivePower}
+**Attack:** ${effectiveAttackMin} - ${effectiveAttackMax}
+**Health:** ${effectiveHealth}
+**Effect:** ${pulled.ability ? pulled.ability : "None"}`;
+  } else {
+    statsText = `**Level:** ${displayLevel}
 **Power:** ${effectivePower}
 **Attack:** ${effectiveAttackMin} - ${effectiveAttackMax}
 **Health:** ${effectiveHealth}
 **Effect:** ${pulled.ability ? pulled.ability : "None"}`;
+  }
 
   // if this was a new acquisition, show the card's `title` as normal text in the description
   const isNew = description === "" && (userCardsMap.get(pulled.id) || {}).acquiredAt;

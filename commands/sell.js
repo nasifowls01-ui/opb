@@ -54,7 +54,8 @@ export async function execute(interactionOrMessage, client) {
   if (entry.count <= 0) cardsMap.delete(card.id);
   else cardsMap.set(card.id, entry);
 
-  prog.cards = Object.fromEntries(cardsMap);
+  prog.cards = cardsMap;
+  prog.markModified('cards');
   await prog.save();
 
   // add balance

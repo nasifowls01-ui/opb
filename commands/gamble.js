@@ -20,16 +20,16 @@ function makeEmbed(title, desc) {
 async function getNamiBoost(userId) {
   try {
     const inv = await Inventory.findOne({ userId });
-    if (!inv) return 1;
+    if (!inv) return { multiplier: 1, percentage: 0 };
     const hasMap = inv.items && typeof inv.items.get === 'function';
     const getCount = (key) => hasMap ? (inv.items.get(key) || 0) : (inv.items && inv.items[key] || 0);
-    if (getCount('nami_a_03')) return 1.30; // m3 -> 30%
-    if (getCount('nami_b_02')) return 1.20; // m2 -> 20%
-    if (getCount('nami_c_01')) return 1.10; // m1 -> 10%
+    if (getCount('nami_a_03')) return { multiplier: 1.30, percentage: 30 }; // m3 -> 30%
+    if (getCount('nami_b_02')) return { multiplier: 1.20, percentage: 20 }; // m2 -> 20%
+    if (getCount('nami_c_01')) return { multiplier: 1.10, percentage: 10 }; // m1 -> 10%
   } catch (e) {
     console.error('Failed to fetch inventory for nami boost:', e);
   }
-  return 1;
+  return { multiplier: 1, percentage: 0 };
 }
 
 function createDeck(decks = 1) {
@@ -106,8 +106,12 @@ export async function execute(interactionOrMessage) {
     return channel.send(reply);
   }
 
+  // Get Nami boost info to show in embed
+  const boostInfo = await getNamiBoost(userId);
+  const boostText = boostInfo.percentage > 0 ? `\n✨ Nami Boost: +${boostInfo.percentage}%` : "";
+
   // create UI with two buttons (Blackjack / Red or Black)
-  const embed = makeEmbed("Gamble", `Choose a game for ${amount}¥:`);
+  const embed = makeEmbed("Gamble", `Choose a game for ${amount}¥:${boostText}`);
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`gamble:blackjack:${userId}:${amount}`).setLabel("Blackjack").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`gamble:redblack:${userId}:${amount}`).setLabel("Red or Black").setStyle(ButtonStyle.Secondary)
@@ -121,8 +125,12 @@ export async function execute(interactionOrMessage) {
     collector.on("collect", async i => {
       if (i.user.id !== userId) return i.reply({ content: "This is not for you.", ephemeral: true });
       const parts = i.customId.split(":");
-      const game = parts[1];
       const cid0 = parts[0];
+      
+      // Skip if this is a blackjack action button (handle separately below)
+      if (cid0.startsWith("bj_")) return;
+      
+      const game = parts[1];
       // deduct amount upfront
       bal.amount -= amount;
       bal.gamblesToday = (bal.gamblesToday || 0) + 1;
@@ -144,13 +152,36 @@ export async function execute(interactionOrMessage) {
       }
       if (game === "redblack") {
         const pick = Math.random() < 0.5 ? "red" : "black";
-        // ask user to pick via buttons
+        // ask user to pick via buttons — create a new message so collectors are scoped
         const pickRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`pick_red:${userId}:${amount}:${pick}`).setLabel("Red").setStyle(ButtonStyle.Danger),
           new ButtonBuilder().setCustomId(`pick_black:${userId}:${amount}:${pick}`).setLabel("Black").setStyle(ButtonStyle.Secondary)
         );
-        try { await i.update({ embeds: [makeEmbed("Red or Black", "Pick Red or Black")], components: [pickRow] }); }
-        catch (e) { await i.followUp({ content: "Interaction expired.", ephemeral: true }); }
+        try {
+          const pickMsg = await channel.send({ embeds: [makeEmbed("Red or Black", "Pick Red or Black")], components: [pickRow], fetchReply: true });
+          const pickCollector = pickMsg.createMessageComponentCollector({ filter: (ii) => ii.user.id === userId && ii.customId.startsWith("pick_"), time: 60000 });
+          pickCollector.on("collect", async ii => {
+            try { if (!ii.deferred && !ii.replied) await ii.deferUpdate(); } catch (e) { return; }
+            const parts = ii.customId.split(":");
+            const userIdIn = parts[1];
+            const amountIn = parseInt(parts[2],10);
+            const correct = parts[3];
+            const guess = ii.customId.startsWith("pick_red") ? "red" : "black";
+            if (guess === correct) {
+              let currentBal = await Balance.findOne({ userId: userIdIn });
+              if (!currentBal) currentBal = bal;
+              const boostInfo = await getNamiBoost(userIdIn);
+              const payout = Math.ceil(amountIn * 2 * boostInfo.multiplier);
+              currentBal.amount += payout;
+              await currentBal.save();
+              try { await ii.editReply({ embeds: [makeEmbed("Red or Black", `It was ${correct}. You win ${payout}¥`)], components: [] }); }
+              catch (e) { await ii.followUp({ content: `It was ${correct}. You win ${payout}¥`, ephemeral: false }); }
+            } else {
+              try { await ii.editReply({ embeds: [makeEmbed("Red or Black", `It was ${correct}. You lose ${amountIn}¥`)], components: [] }); }
+              catch (e) { await ii.followUp({ content: `It was ${correct}. You lose ${amountIn}¥`, ephemeral: false }); }
+            }
+          });
+        } catch (e) { try { await i.followUp({ content: "Interaction expired.", ephemeral: true }); } catch {} }
       } else {
         // full blackjack flow: create deck and session with proper card values (A, J, Q, K)
         const decks = 1;
@@ -178,8 +209,8 @@ export async function execute(interactionOrMessage) {
 
         // early blackjack check: if player has 21 immediately
         if (pTotal0 === 21 && dTotal0 !== 21) {
-          const boost = await getNamiBoost(userId);
-          const payout = Math.floor(amount * 4 * boost);
+          const boostInfo = await getNamiBoost(userId);
+          const payout = Math.ceil(amount * 4 * boostInfo.multiplier);
           bal.amount += payout;
           await bal.save();
           try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pTotal0} • Dealer: ${dTotal0} \nBlackjack! Bet doubled — you win ${payout}¥`)], components: [] }); }
@@ -191,112 +222,108 @@ export async function execute(interactionOrMessage) {
         try { await i.update({ embeds: [buildBJEmbed(playerCards, dealerCards, "Game start")], components: [actionRow] }); }
         catch (e) { await i.followUp({ content: "Interaction expired.", ephemeral: true }); }
       }
-      // handle bj actions if the custom id starts with bj_
-      if (cid0 && cid0.startsWith("bj_")) {
-        const action = cid0.slice(3); // hit, stand, double
-        const session = BJ_SESSIONS.get(i.user.id);
-        if (!session) return i.reply({ content: "No active blackjack session.", ephemeral: true });
+    });
 
-        const doDealerPlayAndResolve = async () => {
-          while (handValue(session.dealerCards) < 17) session.dealerCards.push(session.deck.pop());
-          const pTotal = handValue(session.playerCards);
-          const dTotal = handValue(session.dealerCards);
-          let result = "lose";
-          if (pTotal > 21) result = "lose";
-          else if (dTotal > 21 || pTotal > dTotal) result = "win";
-          else if (pTotal === dTotal) result = "push";
-          else result = "lose";
+    // Handle blackjack action buttons (hit, stand, double)
+    const bjCollector = msg.createMessageComponentCollector({ filter: (i) => i.customId.startsWith("bj_"), time: 60000 });
+    bjCollector.on("collect", async i => {
+      if (i.user.id !== userId) return i.reply({ content: "This is not for you.", ephemeral: true });
+      
+      const parts = i.customId.split(":");
+      const action = parts[0].slice(3); // hit, stand, double
+      
+      // Refresh balance from database to ensure we have latest amount
+      let currentBal = await Balance.findOne({ userId });
+      if (!currentBal) currentBal = bal;
+      
+      const session = BJ_SESSIONS.get(i.user.id);
+      if (!session) return i.reply({ content: "No active blackjack session.", ephemeral: true });
 
-          if (result === "win") {
-            const boost = await getNamiBoost(i.user.id);
-            const payout = Math.floor(session.bet * 2 * boost);
-            bal.amount += payout;
-            await bal.save();
-            try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pTotal} • Dealer: ${dTotal} \nYou win ${payout}¥`)], components: [] }); }
-            catch (e) { await i.followUp({ content: `You win ${payout}¥`, ephemeral: true }); }
-          } else if (result === "push") {
-            bal.amount += session.bet; await bal.save();
-            try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pTotal} • Dealer: ${dTotal} \nPush — your bet is returned.`)], components: [] }); }
-            catch (e) { await i.followUp({ content: `Push — your bet is returned.`, ephemeral: true }); }
-          } else {
-            try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pTotal} • Dealer: ${dTotal} \nYou lose ${session.bet}¥`)], components: [] }); }
-            catch (e) { await i.followUp({ content: `You lose ${session.bet}¥`, ephemeral: true }); }
-          }
+      const doDealerPlayAndResolve = async () => {
+        while (handValue(session.dealerCards) < 17) session.dealerCards.push(session.deck.pop());
+        const pTotal = handValue(session.playerCards);
+        const dTotal = handValue(session.dealerCards);
+        let result = "lose";
+        if (pTotal > 21) result = "lose";
+        else if (dTotal > 21 || pTotal > dTotal) result = "win";
+        else if (pTotal === dTotal) result = "push";
+        else result = "lose";
+
+        if (result === "win") {
+          const boostInfo = await getNamiBoost(i.user.id);
+          const payout = Math.ceil(session.bet * 2 * boostInfo.multiplier);
+          currentBal.amount += payout;
+          await currentBal.save();
+          try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pTotal} • Dealer: ${dTotal} \nYou win ${payout}¥`)], components: [] }); }
+          catch (e) { await i.followUp({ content: `You win ${payout}¥`, ephemeral: true }); }
+        } else if (result === "push") {
+          currentBal.amount += session.bet; await currentBal.save();
+          try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pTotal} • Dealer: ${dTotal} \nPush — your bet is returned.`)], components: [] }); }
+          catch (e) { await i.followUp({ content: `Push — your bet is returned.`, ephemeral: true }); }
+        } else {
+          try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pTotal} • Dealer: ${dTotal} \nYou lose ${session.bet}¥`)], components: [] }); }
+          catch (e) { await i.followUp({ content: `You lose ${session.bet}¥`, ephemeral: true }); }
+        }
+        BJ_SESSIONS.delete(i.user.id);
+      };
+
+      if (action === "double") {
+        // require exactly two cards to double
+        if (session.playerCards.length !== 2) return i.reply({ content: "You can only double on your first move.", ephemeral: true });
+        const extra = session.bet;
+        if ((currentBal.amount || 0) < extra) return i.reply({ content: "Insufficient balance to double.", ephemeral: true });
+        currentBal.amount -= extra;
+        session.bet = session.bet * 2;
+        session.doubled = true;
+        session.playerCards.push(session.deck.pop());
+
+        // after doubling, resolve as stand
+        await doDealerPlayAndResolve();
+        return;
+      }
+
+      if (action === "hit") {
+        session.playerCards.push(session.deck.pop());
+        const pVal = handValue(session.playerCards);
+        if (pVal > 21) {
           BJ_SESSIONS.delete(i.user.id);
-        };
+          try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pVal} • Dealer: ${handValue(session.dealerCards)} \nYou busted and lose ${session.bet}¥`)], components: [] }); }
+          catch (e) { await i.followUp({ content: `You busted and lose ${session.bet}¥`, ephemeral: true }); }
+          return;
+        }
 
-        if (action === "double") {
-          // require exactly two cards to double
-          if (session.playerCards.length !== 2) return i.reply({ content: "You can only double on your first move.", ephemeral: true });
-          const extra = session.bet;
-          if ((bal.amount || 0) < extra) return i.reply({ content: "Insufficient balance to double.", ephemeral: true });
-          bal.amount -= extra;
+        // if player reaches exactly 21, auto-double the bet (per requirement) and resolve
+        if (pVal === 21) {
           session.bet = session.bet * 2;
-          session.doubled = true;
-          session.playerCards.push(session.deck.pop());
-
-          // after doubling, resolve as stand
           await doDealerPlayAndResolve();
           return;
         }
 
-        if (action === "hit") {
-          session.playerCards.push(session.deck.pop());
-          const pVal = handValue(session.playerCards);
-          if (pVal > 21) {
-            BJ_SESSIONS.delete(i.user.id);
-            try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pVal} • Dealer: ${handValue(session.dealerCards)} \nYou busted and lose ${session.bet}¥`)], components: [] }); }
-            catch (e) { await i.followUp({ content: `You busted and lose ${session.bet}¥`, ephemeral: true }); }
-            return;
-          }
+        // otherwise update embed with player's total only
+        const buildBJEmbed = (pCards, dCards, message) => {
+          const pVal = handValue(pCards);
+          const dShown = handValue(dCards);
+          return makeEmbed("Blackjack", `${message}\nYou: ${pVal} • Dealer: ${dShown}`);
+        };
+        
+        try { await i.update({ embeds: [buildBJEmbed(session.playerCards, session.dealerCards, "Hit")], components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`bj_hit:${userId}:${session.bet}`).setLabel("Hit").setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`bj_stand:${userId}:${session.bet}`).setLabel("Stand").setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`bj_double:${userId}:${session.bet}`).setLabel("Double").setStyle(ButtonStyle.Success)
+          )
+        ] }); }
+        catch (e) { await i.followUp({ content: `You: ${handValue(session.playerCards)} • Dealer: ${handValue(session.dealerCards)}`, ephemeral: true }); }
+        return;
+      }
 
-          // if player reaches exactly 21, auto-double the bet (per requirement) and resolve
-          if (pVal === 21) {
-            session.bet = session.bet * 2;
-            await doDealerPlayAndResolve();
-            return;
-          }
-
-          // otherwise update embed with player's total only
-          try { await i.update({ embeds: [buildBJEmbed(session.playerCards, session.dealerCards, "Hit")], components: [
-            new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setCustomId(`bj_hit:${userId}:${session.bet}`).setLabel("Hit").setStyle(ButtonStyle.Primary),
-              new ButtonBuilder().setCustomId(`bj_stand:${userId}:${session.bet}`).setLabel("Stand").setStyle(ButtonStyle.Secondary),
-              new ButtonBuilder().setCustomId(`bj_double:${userId}:${session.bet}`).setLabel("Double").setStyle(ButtonStyle.Success)
-            )
-          ] }); }
-          catch (e) { await i.followUp({ content: `You: ${handValue(session.playerCards)} • Dealer: ${session.dealerCards[0]} + ?`, ephemeral: true }); }
-          return;
-        }
-
-        if (action === "stand") {
-          await doDealerPlayAndResolve();
-          return;
-        }
+      if (action === "stand") {
+        await doDealerPlayAndResolve();
+        return;
       }
     });
 
-    // handle pick buttons for red/black
-    const follow = msg.channel.createMessageComponentCollector({ time: 60000 });
-    follow.on("collect", async ii => {
-      if (!ii.customId.startsWith("pick_")) return;
-      const parts = ii.customId.split(":");
-      const userIdIn = parts[1];
-      const amountIn = parseInt(parts[2],10);
-      const correct = parts[3];
-      if (ii.user.id !== userIdIn) return ii.reply({ content: "Not your game.", ephemeral: true });
-      const guess = ii.customId.startsWith("pick_red") ? "red" : "black";
-      if (guess === correct) {
-        // win double + Nami boost
-        const boost = await getNamiBoost(userIdIn);
-        const payout = Math.floor(amountIn * 2 * boost);
-        bal.amount += payout;
-        await bal.save();
-        try { await ii.update({ embeds: [makeEmbed("Red or Black", `It was ${correct}. You win ${payout}¥`)], components: [] }); } catch(e) { await ii.followUp({ content: `It was ${correct}. You win ${payout}¥`, ephemeral: true }); }
-      } else {
-        try { await ii.update({ embeds: [makeEmbed("Red or Black", `It was ${correct}. You lose ${amountIn}¥`)], components: [] }); } catch(e) { await ii.followUp({ content: `It was ${correct}. You lose ${amountIn}¥`, ephemeral: true }); }
-      }
-    });
+    
 
   } else {
     // prefix: send embed and create collector on channel message
@@ -305,19 +332,61 @@ export async function execute(interactionOrMessage) {
     collector.on("collect", async i => {
       if (i.user.id !== userId) return i.reply({ content: "This is not for you.", ephemeral: true });
       const parts = i.customId.split(":");
-      const game = parts[1];
       const cid0 = parts[0];
+      
+      // Skip if this is a blackjack action button (handle separately below)
+      if (cid0.startsWith("bj_")) return;
+      
+      const game = parts[1];
       // deduct amount upfront
       bal.amount -= amount;
       bal.gamblesToday = (bal.gamblesToday || 0) + 1;
       await bal.save();
+
+      // Record quest progress for gambling
+      try {
+        const Quest = (await import("../models/Quest.js")).default;
+        const [dailyQuests, weeklyQuests] = await Promise.all([
+          Quest.getCurrentQuests("daily"),
+          Quest.getCurrentQuests("weekly")
+        ]);
+        await Promise.all([
+          dailyQuests.recordAction(userId, "gamble", 1),
+          weeklyQuests.recordAction(userId, "gamble", 1)
+        ]);
+      } catch (e) {
+        console.error("Failed to record gamble quest progress:", e);
+      }
+
       if (game === "redblack") {
         const pick = Math.random() < 0.5 ? "red" : "black";
         const pickRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`pick_red:${userId}:${amount}:${pick}`).setLabel("Red").setStyle(ButtonStyle.Danger),
           new ButtonBuilder().setCustomId(`pick_black:${userId}:${amount}:${pick}`).setLabel("Black").setStyle(ButtonStyle.Secondary)
         );
-        try { await i.update({ embeds: [makeEmbed("Red or Black", "Pick Red or Black")], components: [pickRow] }); } catch(e) { await i.followUp({ content: "Interaction expired.", ephemeral: true }); }
+        try {
+          const pickMsg = await channel.send({ embeds: [makeEmbed("Red or Black", "Pick Red or Black")], components: [pickRow], fetchReply: true });
+          const pickCollector = pickMsg.createMessageComponentCollector({ filter: (ii) => ii.user.id === userId && ii.customId.startsWith("pick_"), time: 60000 });
+          pickCollector.on("collect", async ii => {
+            try { if (!ii.deferred && !ii.replied) await ii.deferUpdate(); } catch (e) { return; }
+            const parts = ii.customId.split(":");
+            const userIdIn = parts[1];
+            const amountIn = parseInt(parts[2],10);
+            const correct = parts[3];
+            const guess = ii.customId.startsWith("pick_red") ? "red" : "black";
+            if (guess === correct) {
+              const boostInfo = await getNamiBoost(userIdIn);
+              const payout = Math.ceil(amountIn * 2 * boostInfo.multiplier);
+              bal.amount += payout;
+              await bal.save();
+              try { await ii.editReply({ embeds: [makeEmbed("Red or Black", `It was ${correct}. You win ${payout}¥`)], components: [] }); }
+              catch (e) { await ii.followUp({ content: `It was ${correct}. You win ${payout}¥`, ephemeral: false }); }
+            } else {
+              try { await ii.editReply({ embeds: [makeEmbed("Red or Black", `It was ${correct}. You lose ${amountIn}¥`)], components: [] }); }
+              catch (e) { await ii.followUp({ content: `It was ${correct}. You lose ${amountIn}¥`, ephemeral: false }); }
+            }
+          });
+        } catch (e) { try { await i.followUp({ content: "Interaction expired.", ephemeral: true }); } catch {} }
       } else if (game === "blackjack") {
         // create interactive blackjack session for prefix users as well (use deck)
         const decks = 1;
@@ -338,8 +407,8 @@ export async function execute(interactionOrMessage) {
         const dTotal0 = handValue(dealerCards);
 
         if (pTotal0 === 21 && dTotal0 !== 21) {
-          const boost = await getNamiBoost(userId);
-          const payout = Math.floor(amount * 4 * boost);
+          const boostInfo = await getNamiBoost(userId);
+          const payout = Math.ceil(amount * 4 * boostInfo.multiplier);
           bal.amount += payout;
           await bal.save();
           try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pTotal0} • Dealer: ${dTotal0} \nBlackjack! Bet doubled — you win ${payout}¥`)], components: [] }); } catch(e) { await i.followUp({ content: `Blackjack! You win ${payout}¥`, ephemeral: true }); }
@@ -362,8 +431,8 @@ export async function execute(interactionOrMessage) {
         else if (player === dealer) result = "push";
         else result = "lose";
         if (result === "win") {
-          const boost = await getNamiBoost(i.user.id);
-          const payout = Math.floor(amount * 2 * boost);
+          const boostInfo = await getNamiBoost(i.user.id);
+          const payout = Math.ceil(amount * 2 * boostInfo.multiplier);
           bal.amount += payout;
           await bal.save();
           try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${player} • Dealer: ${dealer} \nYou win ${payout}¥`)], components: [] }); } catch(e) { await i.followUp({ content: `You: ${player} • Dealer: ${dealer} \nYou win ${payout}¥`, ephemeral: true }); }
@@ -376,23 +445,102 @@ export async function execute(interactionOrMessage) {
       }
     });
 
-    const follow = msg.channel.createMessageComponentCollector({ time: 60000 });
-    follow.on("collect", async ii => {
-      if (!ii.customId.startsWith("pick_")) return;
-      const parts = ii.customId.split(":");
-      const userIdIn = parts[1];
-      const amountIn = parseInt(parts[2],10);
-      const correct = parts[3];
-      if (ii.user.id !== userIdIn) return ii.reply({ content: "Not your game.", ephemeral: true });
-      const guess = ii.customId.startsWith("pick_red") ? "red" : "black";
-      if (guess === correct) {
-        const payout = amountIn * 2;
-        bal.amount += payout;
-        await bal.save();
-        await ii.update({ embeds: [makeEmbed("Red or Black", `It was ${correct}. You win ${payout}¥`)], components: [] });
-      } else {
-        await ii.update({ embeds: [makeEmbed("Red or Black", `It was ${correct}. You lose ${amountIn}¥`)], components: [] });
+    // Handle blackjack action buttons for prefix commands
+    const bjCollector = msg.createMessageComponentCollector({ filter: (i) => i.customId.startsWith("bj_"), time: 60000 });
+    bjCollector.on("collect", async i => {
+      if (i.user.id !== userId) return i.reply({ content: "This is not for you.", ephemeral: true });
+      
+      const parts = i.customId.split(":");
+      const action = parts[0].slice(3); // hit, stand, double
+      
+      // Refresh balance from database to ensure we have latest amount
+      let currentBal = await Balance.findOne({ userId });
+      if (!currentBal) currentBal = bal;
+      
+      const session = BJ_SESSIONS.get(i.user.id);
+      if (!session) return i.reply({ content: "No active blackjack session.", ephemeral: true });
+
+      const doDealerPlayAndResolve = async () => {
+        while (handValue(session.dealerCards) < 17) session.dealerCards.push(session.deck.pop());
+        const pTotal = handValue(session.playerCards);
+        const dTotal = handValue(session.dealerCards);
+        let result = "lose";
+        if (pTotal > 21) result = "lose";
+        else if (dTotal > 21 || pTotal > dTotal) result = "win";
+        else if (pTotal === dTotal) result = "push";
+        else result = "lose";
+
+        if (result === "win") {
+          const boostInfo = await getNamiBoost(i.user.id);
+          const payout = Math.ceil(session.bet * 2 * boostInfo.multiplier);
+          currentBal.amount += payout;
+          await currentBal.save();
+          try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pTotal} • Dealer: ${dTotal} \nYou win ${payout}¥`)], components: [] }); }
+          catch (e) { await i.followUp({ content: `You win ${payout}¥`, ephemeral: true }); }
+        } else if (result === "push") {
+          currentBal.amount += session.bet; await currentBal.save();
+          try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pTotal} • Dealer: ${dTotal} \nPush — your bet is returned.`)], components: [] }); }
+          catch (e) { await i.followUp({ content: `Push — your bet is returned.`, ephemeral: true }); }
+        } else {
+          try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pTotal} • Dealer: ${dTotal} \nYou lose ${session.bet}¥`)], components: [] }); }
+          catch (e) { await i.followUp({ content: `You lose ${session.bet}¥`, ephemeral: true }); }
+        }
+        BJ_SESSIONS.delete(i.user.id);
+      };
+
+      if (action === "double") {
+        if (session.playerCards.length !== 2) return i.reply({ content: "You can only double on your first move.", ephemeral: true });
+        const extra = session.bet;
+        if ((currentBal.amount || 0) < extra) return i.reply({ content: "Insufficient balance to double.", ephemeral: true });
+        currentBal.amount -= extra;
+        session.bet = session.bet * 2;
+        session.doubled = true;
+        session.playerCards.push(session.deck.pop());
+        await currentBal.save();
+        await doDealerPlayAndResolve();
+        return;
+      }
+
+      if (action === "hit") {
+        session.playerCards.push(session.deck.pop());
+        const pVal = handValue(session.playerCards);
+        if (pVal > 21) {
+          BJ_SESSIONS.delete(i.user.id);
+          try { await i.update({ embeds: [makeEmbed("Blackjack", `You: ${pVal} • Dealer: ${handValue(session.dealerCards)} \nYou busted and lose ${session.bet}¥`)], components: [] }); }
+          catch (e) { await i.followUp({ content: `You busted and lose ${session.bet}¥`, ephemeral: true }); }
+          return;
+        }
+
+        if (pVal === 21) {
+          session.bet = session.bet * 2;
+          await doDealerPlayAndResolve();
+          return;
+        }
+
+        const buildBJEmbed = (pCards, dCards, message) => {
+          const pVal = handValue(pCards);
+          const dShown = handValue(dCards);
+          return makeEmbed("Blackjack", `${message}\nYou: ${pVal} • Dealer: ${dShown}`);
+        };
+        
+        try { await i.update({ embeds: [buildBJEmbed(session.playerCards, session.dealerCards, "Hit")], components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`bj_hit:${userId}:${session.bet}`).setLabel("Hit").setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`bj_stand:${userId}:${session.bet}`).setLabel("Stand").setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`bj_double:${userId}:${session.bet}`).setLabel("Double").setStyle(ButtonStyle.Success)
+          )
+        ] }); }
+        catch (e) { await i.followUp({ content: `You: ${handValue(session.playerCards)} • Dealer: ${handValue(session.dealerCards)}`, ephemeral: true }); }
+        return;
+      }
+
+      if (action === "stand") {
+        await doDealerPlayAndResolve();
+        return;
       }
     });
+
+    // Note: red/black picks use per-message collectors created when the pick message is sent.
+    // Removed a legacy channel-scoped collector to prevent collector cross-talk.
   }
 }

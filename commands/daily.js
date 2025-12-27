@@ -75,14 +75,23 @@ export async function execute(interactionOrMessage) {
   inv.chests.S = (inv.chests.S || 0) + chestGain.S;
   await inv.save();
 
+  const stars = '★'.repeat(Math.max(0, Math.min(5, day))) + '☆'.repeat(Math.max(0, 5 - day));
+  const chestList = [];
+  if (chestGain.B) chestList.push(`B x${chestGain.B}`);
+  if (chestGain.A) chestList.push(`A x${chestGain.A}`);
+  if (chestGain.S) chestList.push(`S x${chestGain.S}`);
+  if (chestGain.C && chestList.length === 0) chestList.push(`C x${chestGain.C}`);
+  const chestsText = chestList.length ? chestList.join(', ') : 'None';
+
   const embed = new EmbedBuilder()
-    .setTitle("Daily Reward")
-    .setColor(0xFFD700)
-    .setDescription(`Day ${day} streak claimed!\n\nYou received ${rewardBeli}¥.`)
-    .addFields(
-      { name: "Chests", value: `C: ${chestGain.C} • B: ${chestGain.B} • A: ${chestGain.A} • S: ${chestGain.S}`, inline: false }
+    .setTitle('Daily Reward')
+    .setColor(0xFFFFFF)
+    .setDescription(
+      `Beli obtained: ${rewardBeli}¥\n` +
+      `Chests obtained: ${chestsText}\n` +
+      `daily streak: ${stars}`
     )
-    .setFooter({ text: `Streak: ${day}/5` , iconURL: user.displayAvatarURL() });
+    .setFooter({ text: `claimed by ${user.username}`, iconURL: user.displayAvatarURL() });
 
   if (isInteraction) return interactionOrMessage.reply({ embeds: [embed] });
   return channel.send({ embeds: [embed] });

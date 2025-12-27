@@ -2,6 +2,7 @@ import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import Balance from "../models/Balance.js";
 import Pull from "../models/Pull.js";
 import Quest from "../models/Quest.js";
+import Duel from "../models/Duel.js";
 
 export const data = new SlashCommandBuilder()
   .setName("timers")
@@ -48,10 +49,11 @@ export async function execute(interactionOrMessage) {
     }
   } catch (e) {}
 
-  // Missions, Gambling, Daily (per-user fields in Balance)
+  // Missions, Gambling, Daily, Duel XP (per-user fields in Balance)
   try {
     let bal = await Balance.findOne({ userId });
     if (!bal) bal = new Balance({ userId });
+    const duel = await Duel.findOne({ userId });
 
     // Missions: lastMission + 24h
     if (bal.lastMission) {
@@ -69,6 +71,18 @@ export async function execute(interactionOrMessage) {
     const nextGambleReset = (win + 1) * dayMs;
     const msG = nextGambleReset - now;
     lines.push(`• Gambling resets in: ${formatMs(msG)} • Gambles today: ${bal.gamblesToday || 0}/10`);
+
+    // Duel XP tracking (max 100 per day)
+    if (duel) {
+      const duelWin = duel.xpWindow || Math.floor(now / dayMs);
+      if (duelWin !== Math.floor(now / dayMs)) {
+        lines.push(`• Duel XP: 0/100 (resets soon)`);
+      } else {
+        lines.push(`• Duel XP: ${duel.xpToday || 0}/100`);
+      }
+    } else {
+      lines.push(`• Duel XP: 0/100`);
+    }
 
     // Daily command availability
     if (bal.lastDaily) {
@@ -90,6 +104,7 @@ export async function execute(interactionOrMessage) {
     `**pulls:** ${lines.find(l => l.startsWith('• Pulls')) ? '\n' + lines.filter(l => l.startsWith('• Pulls')).join('\n') : '\nNo data'}\n\n` +
     `**mission:** ${lines.find(l => l.includes('Mission')) ? '\n' + lines.filter(l => l.includes('Mission')).join('\n') : '\nNo data'}\n\n` +
     `**gambling:** ${lines.find(l => l.includes('Gambling')) ? '\n' + lines.filter(l => l.includes('Gambling')).join('\n') : '\nNo data'}\n\n` +
+    `**duel xp:** ${lines.find(l => l.includes('Duel XP')) ? '\n' + lines.filter(l => l.includes('Duel XP')).join('\n') : '\nNo data'}\n\n` +
     `**daily rewards:** ${lines.find(l => l.includes('Daily available') || l.includes('Daily:')) ? '\n' + lines.filter(l => l.includes('Daily available') || l.includes('Daily:')).join('\n') : '\nNo data'}\n`;
 
   if (isInteraction) return interactionOrMessage.reply({ content: text });

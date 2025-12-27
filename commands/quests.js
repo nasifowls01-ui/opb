@@ -27,7 +27,7 @@ export async function buildQuestEmbed(questDoc, user) {
     const progress = userProgress.get(quest.id) || { current: 0, claimed: false };
     if (progress.claimed) return; // don't show claimed quests so UI stays clean per-user
 
-    const status = progress.current >= quest.target ? "🎁" : "🔄";
+    const status = progress.current >= quest.target ? "✓" : "↺";
     
     // Format rewards
     const rewards = [];

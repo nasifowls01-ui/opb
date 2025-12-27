@@ -126,13 +126,23 @@ export async function execute(interactionOrMessage, client) {
       const argStart = (parts[2] && parts[2].toLowerCase() === 'give') ? 4 : 3;
       // assume last token is mention/ID
       const targetToken = parts[parts.length - 1];
-      target = targetToken ? { id: targetToken.replace(/[^0-9]/g, ""), username: targetToken } : null;
+      const targetId = targetToken ? targetToken.replace(/[^0-9]/g, "") : null;
+      if (!targetId || targetId === "") {
+        return interactionOrMessage.channel.send("Please mention or provide a valid user ID.");
+      }
+      target = { id: targetId, username: targetToken };
       cardQ = parts.slice(argStart, parts.length - 1).join(" ") || parts[argStart] || "";
     }
+    
+    if (!target || !target.id) {
+      const reply = `Invalid user specified.`;
+      if (isInteraction) return interactionOrMessage.reply({ content: reply, ephemeral: true }); else return interactionOrMessage.channel.send(reply);
+    }
+    
     const card = fuzzyFindCard(cardQ) || cards.find(c => c.id === cardQ) || null;
     if (!card) {
       const reply = `Card "${cardQ}" not found.`;
-      if (isInteraction) return interactionOrMessage.reply({ content: reply, ephemeral: true }); else return channel.send(reply);
+      if (isInteraction) return interactionOrMessage.reply({ content: reply, ephemeral: true }); else return interactionOrMessage.channel.send(reply);
     }
     let prog = await Progress.findOne({ userId: target.id });
     if (!prog) prog = new Progress({ userId: target.id, cards: {} });
@@ -140,7 +150,8 @@ export async function execute(interactionOrMessage, client) {
     const entry = cardsMap.get(card.id) || { count: 0, xp: 0, level: 0, acquiredAt: Date.now() };
     entry.count = (entry.count || 0) + 1;
     cardsMap.set(card.id, entry);
-    prog.cards = Object.fromEntries(cardsMap);
+    prog.cards = cardsMap;
+    prog.markModified('cards');
     await prog.save();
     const embed = new EmbedBuilder().setTitle("Card Given").setDescription(`Gave **${card.name}** to <@${target.id}>`).setColor(0x3498db);
     if (isInteraction) return interactionOrMessage.reply({ embeds: [embed], ephemeral: true }); else return channel.send({ embeds: [embed] });

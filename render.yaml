@@ -10,3 +10,9 @@ services:
     startCommand: "npm start"
     # Optionally expose health path in Render's health checks
     # healthCheckPath: "/health"
+    # Sample environment variables (set these in the Render UI instead of committing):
+    # envVars:
+    #   - key: STARTUP_LOGIN_DELAY_MS
+    #     value: "5000"  # delay before attempting gateway login (ms)
+    #   - key: DISABLE_GATEWAY
+    #     value: "false"  # set true to run in interactions-only (webhook) mode

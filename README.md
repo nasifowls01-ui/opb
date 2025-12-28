@@ -36,6 +36,7 @@ ALL of the above
 
 - Create a **Web Service** on Render and connect your GitHub repository.
 - In Render, set the environment variables: `TOKEN`, `MONGO_URI`, `CLIENT_ID`, `OWNER_ID`, etc. **Do not** commit your `.env` to the repo.
+- If the bot occasionally fails to login immediately after deploy (common on some hosts), set `STARTUP_LOGIN_DELAY_MS` to delay initial gateway login in milliseconds (default: `5000`). Values between `5000` and `10000` are recommended for Render.
 - Render runs the service and provides a public URL. The bot listens on `process.env.PORT` so Render's port routing works automatically.
 - The app exposes a lightweight health endpoint: `GET /`, `GET /health` and `GET /_health` which return HTTP 200 `OK`.
 - Use UptimeRobot to ping your Render service URL (e.g., `https://your-service.onrender.com/health`) every 5 minutes to keep it continuously running.

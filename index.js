@@ -440,6 +440,19 @@ if (!process.env.TOKEN) {
       return;
     }
 
+    // Optional initial delay before attempting gateway login. Useful for hosts like Render
+    // where networking or other services may not be fully ready immediately after process start.
+    const STARTUP_LOGIN_DELAY_MS = Number(process.env.STARTUP_LOGIN_DELAY_MS) || 5000;
+    if (STARTUP_LOGIN_DELAY_MS > 0) {
+      console.log(`Delaying gateway login by ${STARTUP_LOGIN_DELAY_MS}ms to allow environment to settle...`);
+      await sleep(STARTUP_LOGIN_DELAY_MS);
+    }
+
+    // Additional diagnostics to help Render debugging
+    client.on('warn', (w) => console.warn('client warn:', w));
+    process.on('unhandledRejection', (r) => console.error('unhandledRejection:', r));
+    process.on('uncaughtException', (err) => console.error('uncaughtException:', err));
+
     (async function gatewayLoop(){
       while (true) {
         attempt++;
